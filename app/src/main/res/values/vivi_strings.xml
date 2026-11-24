@@ -1269,7 +1269,11 @@
     <string name="announcement_close">Close</string>
     <string name="announcement_loading">Loading announcement…</string>
     <string name="announcement_error">Unable to load details</string>
-    <string name="claude_dj">Claude DJ (Android Auto voice)</string>
+    <string name="claude_dj">Claude DJ</string>
     <string name="claude_dj_api_key">Claude API key</string>
-    <string name="claude_dj_desc">Say &quot;Hey Google, play something for a night drive on Laces&quot; and Claude builds the queue. Without a key, voice requests do a plain song search.</string>
+    <string name="claude_dj_desc">Tap the mic in Search, or say \"Hey Google, play something for a night drive on Laces\" (phone or Android Auto), and Claude builds the queue. Without a key, requests do a plain song search.</string>
+    <string name="claude_dj_prompt">What do you want to hear?</string>
+    <string name="claude_dj_thinking">Claude is picking songs…</string>
+    <string name="claude_dj_no_results">No songs found for that request</string>
+    <string name="claude_dj_no_speech">Speech recognition is not available on this device</string>
 </resources>

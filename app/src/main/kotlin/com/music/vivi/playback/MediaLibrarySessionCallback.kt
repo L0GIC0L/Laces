@@ -36,7 +36,6 @@ import com.music.innertube.models.SongItem
 import com.music.innertube.models.filterExplicit
 import com.music.innertube.models.filterVideoSongs
 import com.music.vivi.R
-import com.music.vivi.constants.ClaudeDjApiKey
 import com.music.vivi.constants.HideExplicitKey
 import com.music.vivi.constants.HideVideoSongsKey
 import com.music.vivi.constants.MediaSessionConstants
@@ -54,14 +53,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.plus
-import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -445,7 +441,7 @@ constructor(
 
             // "Hey Google, play <query> on Laces" arrives as an item with only a search query.
             mediaItems.firstOrNull()?.requestMetadata?.searchQuery?.let { voiceQuery ->
-                val items = resolveVoiceRequest(voiceQuery)
+                val items = ClaudeDj.buildQueue(context, database, voiceQuery)
                 return@future if (items.isEmpty()) defaultResult
                 else MediaItemsWithStartPosition(items, 0, C.TIME_UNSET)
             }
@@ -638,48 +634,6 @@ constructor(
                 else -> defaultResult
             }
         }
-
-    /**
-     * Asks Claude to turn the spoken request into a queue. Falls back to a plain song search
-     * when no Claude API key is set or the request fails, so voice search always does something.
-     */
-    private suspend fun resolveVoiceRequest(query: String): List<MediaItem> = withContext(Dispatchers.IO) {
-        if (query.isBlank()) {
-            return@withContext database.allSongs().first().shuffled().map { it.toMediaItem() }
-        }
-
-        val hideExplicit = context.dataStore.get(HideExplicitKey, false)
-        val apiKey = context.dataStore.get(ClaudeDjApiKey, "")
-
-        suspend fun searchSongs(text: String): List<SongItem> =
-            YouTube.search(text, YouTube.SearchFilter.FILTER_SONG).getOrNull()
-                ?.items
-                ?.filterIsInstance<SongItem>()
-                ?.filterExplicit(hideExplicit)
-                ?: emptyList()
-
-        val picks = if (apiKey.isBlank()) {
-            emptyList()
-        } else {
-            try {
-                ClaudeDj.pickSongs(apiKey, query)
-            } catch (e: Exception) {
-                reportException(e)
-                emptyList()
-            }
-        }
-
-        if (picks.isEmpty()) {
-            return@withContext searchSongs(query).map { it.toMediaItem() }
-        }
-
-        picks
-            .map { pick -> async { searchSongs(pick).firstOrNull() } }
-            .awaitAll()
-            .filterNotNull()
-            .distinctBy { it.id }
-            .map { it.toMediaItem() }
-    }
 
     private fun drawableUri(
         @DrawableRes id: Int,

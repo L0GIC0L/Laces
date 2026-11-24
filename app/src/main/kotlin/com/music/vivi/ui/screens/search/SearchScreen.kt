@@ -5,6 +5,12 @@
 
 package com.music.vivi.ui.screens.search
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +51,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
@@ -69,6 +76,8 @@ import com.music.vivi.constants.PauseSearchHistoryKey
 import com.music.vivi.constants.SearchSource
 import com.music.vivi.constants.SearchSourceKey
 import com.music.vivi.db.entities.SearchHistory
+import com.music.vivi.playback.ClaudeDj
+import com.music.vivi.playback.queues.ListQueue
 import com.music.vivi.playback.queues.YouTubeQueue
 import com.music.vivi.ui.component.NavigationTitle
 import com.music.vivi.utils.rememberEnumPreference
@@ -105,6 +114,33 @@ fun SearchScreen(
     val isPlayerExpanded = LocalIsPlayerExpanded.current
     val playerConnection = LocalPlayerConnection.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+
+    val context = LocalContext.current
+    val claudeDjThinking = stringResource(R.string.claude_dj_thinking)
+    val claudeDjNoResults = stringResource(R.string.claude_dj_no_results)
+    val voiceLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            ?: return@rememberLauncherForActivityResult
+        Toast.makeText(context, claudeDjThinking, Toast.LENGTH_SHORT).show()
+        coroutineScope.launch {
+            val items = ClaudeDj.buildQueue(context, database, spoken)
+            if (items.isEmpty()) {
+                Toast.makeText(context, claudeDjNoResults, Toast.LENGTH_SHORT).show()
+            } else {
+                playerConnection?.playQueue(ListQueue(title = spoken, items = items))
+            }
+        }
+    }
+    val askClaudeDj: () -> Unit = {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.claude_dj_prompt))
+        try {
+            voiceLauncher.launch(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(context, R.string.claude_dj_no_speech, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val moodAndGenresList by moodAndGenresViewModel.moodAndGenres.collectAsState()
     val thumbnails by moodAndGenresViewModel.thumbnails.collectAsState()
@@ -252,9 +288,16 @@ fun SearchScreen(
                                     )
                                 }
                             }
+                            IconButton(onClick = askClaudeDj) {
+                                Icon(
+                                    painter = painterResource(R.drawable.mic),
+                                    contentDescription = stringResource(R.string.claude_dj),
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                             IconButton(
                                 onClick = {
-                                    searchSource = if (searchSource == SearchSource.ONLINE) 
+                                    searchSource = if (searchSource == SearchSource.ONLINE)
                                         SearchSource.LOCAL else SearchSource.ONLINE
                                 }
                             ) {

@@ -5,6 +5,14 @@
 
 package com.music.vivi
 
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filterNotNull
+import com.music.vivi.playback.queues.ListQueue
+import com.music.vivi.playback.ClaudeDj
+import androidx.compose.runtime.snapshotFlow
+import android.widget.Toast
+import android.provider.MediaStore
+import android.app.SearchManager
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.PendingIntent
@@ -1422,8 +1430,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** "Hey Google / Gemini, play <query> on Laces" on the phone, outside Android Auto. */
+    private fun handleVoiceSearchIntent(intent: Intent): Boolean {
+        if (intent.action != MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH || intent.data != null) return false
+        val query = intent.getStringExtra(SearchManager.QUERY).orEmpty()
+        intent.action = null
+        Toast.makeText(this, R.string.claude_dj_thinking, Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val items = ClaudeDj.buildQueue(applicationContext, database, query)
+            if (items.isEmpty()) {
+                Toast.makeText(this@MainActivity, R.string.claude_dj_no_results, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val connection = snapshotFlow { playerConnection }.filterNotNull().first()
+            connection.playQueue(ListQueue(title = query.ifBlank { null }, items = items))
+        }
+        return true
+    }
+
     private fun handleDeepLinkIntent(intent: Intent, navController: NavHostController) {
-        val uri = intent.data ?: intent.extras?.getString(Intent.EXTRA_TEXT)?.toUri() ?: return
+        if (handleVoiceSearchIntent(intent)) return
+        val uri = intent.data ?:intent.extras?.getString(Intent.EXTRA_TEXT)?.toUri() ?: return
         intent.data = null
         intent.removeExtra(Intent.EXTRA_TEXT)
         val coroutineScope = lifecycle.coroutineScope
