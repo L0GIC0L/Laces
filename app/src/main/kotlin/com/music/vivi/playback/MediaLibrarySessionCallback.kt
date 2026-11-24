@@ -36,6 +36,7 @@ import com.music.innertube.models.SongItem
 import com.music.innertube.models.filterExplicit
 import com.music.innertube.models.filterVideoSongs
 import com.music.vivi.R
+import com.music.vivi.constants.ClaudeDjApiKey
 import com.music.vivi.constants.HideExplicitKey
 import com.music.vivi.constants.HideVideoSongsKey
 import com.music.vivi.constants.MediaSessionConstants
@@ -60,6 +61,8 @@ import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.plus
 import javax.inject.Inject
 
+private const val CLAUDE_DJ = "claude_dj"
+
 @androidx.annotation.OptIn(UnstableApi::class)
 class MediaLibrarySessionCallback
 @Inject
@@ -73,6 +76,9 @@ constructor(
     var toggleLike: () -> Unit = {}
     var toggleStartRadio: () -> Unit = {}
     var toggleLibrary: () -> Unit = {}
+
+    @Volatile private var claudeDjQuery: String? = null
+    @Volatile private var claudeDjQueue: List<MediaItem> = emptyList()
 
     override fun onConnect(
         session: MediaSession,
@@ -357,6 +363,19 @@ constructor(
                 return@future LibraryResult.ofItemList(emptyList(), params.withContentStyleHints())
             }
 
+            // With a Claude key, the in-car search button becomes the Claude DJ.
+            // Android Auto pages through results, so Claude is asked once per query.
+            if (context.dataStore.get(ClaudeDjApiKey, "").isNotBlank()) {
+                if (claudeDjQuery != query) {
+                    claudeDjQueue = ClaudeDj.buildQueue(context, database, query)
+                    claudeDjQuery = query
+                }
+                val items = claudeDjQueue.mapIndexed { index, item ->
+                    item.buildUpon().setMediaId("$CLAUDE_DJ/$index").build()
+                }
+                return@future LibraryResult.ofItemList(items.paginate(page, pageSize), params.withContentStyleHints())
+            }
+
             try {
                 val searchResults = mutableListOf<MediaItem>()
 
@@ -450,6 +469,13 @@ constructor(
                 ?: return@future defaultResult
 
             when (path.firstOrNull()) {
+                CLAUDE_DJ -> {
+                    val index = path.getOrNull(1)?.toIntOrNull() ?: 0
+                    val queue = claudeDjQueue
+                    if (queue.isEmpty()) defaultResult
+                    else MediaItemsWithStartPosition(queue, index.coerceIn(queue.indices), C.TIME_UNSET)
+                }
+
                 MusicService.SONG -> {
                     val songId = path.getOrNull(1) ?: return@future defaultResult
                     val allSongs = database.songsByCreateDateAsc().first()
