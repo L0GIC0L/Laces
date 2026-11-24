@@ -1,0 +1,473 @@
+/**
+ * vivimusic Project (C) 2026
+ * Licensed under GPL-3.0 | See git history for contributors
+ */
+
+package com.music.vivi.ui.screens.search
+
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SearchBar
+import androidx.compose.material3.SearchBarDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.navigation.NavController
+import com.music.innertube.models.WatchEndpoint
+import com.music.innertube.utils.YouTubeUrlParser
+import com.music.vivi.LocalDatabase
+import com.music.vivi.LocalIsPlayerExpanded
+import com.music.vivi.LocalPlayerAwareWindowInsets
+import com.music.vivi.LocalPlayerConnection
+import com.music.vivi.R
+import com.music.vivi.constants.PauseSearchHistoryKey
+import com.music.vivi.constants.SearchSource
+import com.music.vivi.constants.SearchSourceKey
+import com.music.vivi.db.entities.SearchHistory
+import com.music.vivi.playback.ClaudeDj
+import com.music.vivi.playback.queues.ListQueue
+import com.music.vivi.playback.queues.YouTubeQueue
+import com.music.vivi.ui.component.NavigationTitle
+import com.music.vivi.utils.rememberEnumPreference
+import com.music.vivi.utils.rememberPreference
+import com.music.vivi.viewmodels.MoodAndGenresViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.net.URLEncoder
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.toShape
+import androidx.compose.ui.text.font.FontWeight
+import com.music.vivi.ui.component.ExpressiveBox
+
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun SearchScreen(
+    navController: NavController,
+    pureBlack: Boolean,
+    moodAndGenresViewModel: MoodAndGenresViewModel = hiltViewModel()
+) {
+    val database = LocalDatabase.current
+    val coroutineScope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val isPlayerExpanded = LocalIsPlayerExpanded.current
+    val playerConnection = LocalPlayerConnection.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+
+    val context = LocalContext.current
+    val claudeDjThinking = stringResource(R.string.claude_dj_thinking)
+    val claudeDjNoResults = stringResource(R.string.claude_dj_no_results)
+    val voiceLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            ?: return@rememberLauncherForActivityResult
+        Toast.makeText(context, claudeDjThinking, Toast.LENGTH_SHORT).show()
+        coroutineScope.launch {
+            val items = ClaudeDj.buildQueue(context, database, spoken)
+            if (items.isEmpty()) {
+                Toast.makeText(context, claudeDjNoResults, Toast.LENGTH_SHORT).show()
+            } else {
+                playerConnection?.playQueue(ListQueue(title = spoken, items = items))
+            }
+        }
+    }
+    val askClaudeDj: () -> Unit = {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.claude_dj_prompt))
+        try {
+            voiceLauncher.launch(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(context, R.string.claude_dj_no_speech, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val moodAndGenresList by moodAndGenresViewModel.moodAndGenres.collectAsState()
+    val thumbnails by moodAndGenresViewModel.thumbnails.collectAsState()
+
+    var searchSource by rememberEnumPreference(SearchSourceKey, SearchSource.ONLINE)
+    var query by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue())
+    }
+    val pauseSearchHistory by rememberPreference(PauseSearchHistoryKey, defaultValue = false)
+    var isFirstLaunch by rememberSaveable { mutableStateOf(true) }
+    
+    var searchActive by rememberSaveable { mutableStateOf(false) }
+
+    val searchBarHorizontalPadding by animateDpAsState(
+        targetValue = if (searchActive) 0.dp else 16.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "SearchBarHorizontalPadding"
+    )
+    val searchBarVerticalPadding by animateDpAsState(
+        targetValue = if (searchActive) 0.dp else 8.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "SearchBarVerticalPadding"
+    )
+
+    val onSearch: (String) -> Unit = remember {
+        { searchQuery ->
+            if (searchQuery.isNotEmpty()) {
+                focusManager.clearFocus()
+                println("[LINK_PARSE_DEBUG] onSearch initiated for: $searchQuery")
+                
+                when (val parsedUrl = YouTubeUrlParser.parse(searchQuery)) {
+                    is YouTubeUrlParser.ParsedUrl.Video -> {
+                        println("[LINK_PARSE_DEBUG] Performing direct playback for Video ID: ${parsedUrl.id}")
+                        playerConnection?.playQueue(
+                            YouTubeQueue(
+                                WatchEndpoint(videoId = parsedUrl.id),
+                            ),
+                        )
+                    }
+
+                    is YouTubeUrlParser.ParsedUrl.Artist -> {
+                        println("[LINK_PARSE_DEBUG] Navigating to Artist: ${parsedUrl.id}")
+                        navController.navigate("artist/${parsedUrl.id}")
+                    }
+
+                    null -> {
+                        println("[LINK_PARSE_DEBUG] No URL detected in search action")
+                        navController.navigate("search/${URLEncoder.encode(searchQuery, "UTF-8")}")
+                    }
+                }
+
+                if (!pauseSearchHistory) {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        database.query {
+                            insert(SearchHistory(query = searchQuery))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    val onSearchFromSuggestion: (String) -> Unit = remember {
+        { searchQuery ->
+            if (searchQuery.isNotEmpty()) {
+                focusManager.clearFocus()
+                println("[LINK_PARSE_DEBUG] onSearchFromSuggestion initiated for: $searchQuery")
+                
+                when (val parsedUrl = YouTubeUrlParser.parse(searchQuery)) {
+                    is YouTubeUrlParser.ParsedUrl.Video -> {
+                        println("[LINK_PARSE_DEBUG] Performing direct playback from suggestion for Video ID: ${parsedUrl.id}")
+                        playerConnection?.playQueue(
+                            YouTubeQueue(
+                                WatchEndpoint(videoId = parsedUrl.id),
+                            ),
+                        )
+                    }
+
+                    is YouTubeUrlParser.ParsedUrl.Artist -> {
+                        println("[LINK_PARSE_DEBUG] Navigating to Artist from suggestion: ${parsedUrl.id}")
+                        navController.navigate("artist/${parsedUrl.id}")
+                    }
+
+                    null -> {
+                        println("[LINK_PARSE_DEBUG] No URL detected in suggestion action")
+                        navController.navigate("search/${URLEncoder.encode(searchQuery, "UTF-8")}")
+                    }
+                }
+
+                if (!pauseSearchHistory) {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        database.query {
+                            insert(SearchHistory(query = searchQuery))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            SearchBar(
+                    query = query.text,
+                    onQueryChange = { query = TextFieldValue(it) },
+                    onSearch = { 
+                        onSearch(it)
+                        searchActive = false
+                    },
+                    active = searchActive,
+                    onActiveChange = { searchActive = it },
+                    placeholder = {
+                        DynamicSearchPlaceholder(
+                            searchSource = searchSource,
+                            style = TextStyle(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                fontSize = 16.sp
+                            )
+                        )
+                    },
+                    leadingIcon = {
+                        IconButton(onClick = {
+                            if (searchActive) {
+                                searchActive = false
+                                query = TextFieldValue("") // Clear text when dismissing search
+                            } else {
+                                searchActive = true // Focus search instead of navigating back
+                            }
+                        }) {
+                            Icon(
+                                painter = painterResource(if (searchActive) R.drawable.arrow_back else R.drawable.search),
+                                contentDescription = if (searchActive) stringResource(R.string.dismiss) else null,
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    },
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (query.text.isNotEmpty()) {
+                                IconButton(onClick = { query = TextFieldValue("") }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.close),
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                            IconButton(onClick = askClaudeDj) {
+                                Icon(
+                                    painter = painterResource(R.drawable.mic),
+                                    contentDescription = stringResource(R.string.claude_dj),
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    searchSource = if (searchSource == SearchSource.ONLINE)
+                                        SearchSource.LOCAL else SearchSource.ONLINE
+                                }
+                            ) {
+                                Icon(
+                                    painter = painterResource(
+                                        when (searchSource) {
+                                            SearchSource.LOCAL -> R.drawable.library_music
+                                            SearchSource.ONLINE -> R.drawable.globe_search
+                                        }
+                                    ),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    },
+                    colors = SearchBarDefaults.colors(
+                        containerColor = if (pureBlack) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = searchBarHorizontalPadding)
+                        .padding(vertical = searchBarVerticalPadding)
+                ) {
+                    when (searchSource) {
+                        SearchSource.LOCAL -> LocalSearchScreen(
+                            query = query.text,
+                            navController = navController,
+                            onDismiss = { searchActive = false },
+                            pureBlack = pureBlack
+                        )
+                        SearchSource.ONLINE -> OnlineSearchScreen(
+                            query = query.text,
+                            onQueryChange = { query = it },
+                            navController = navController,
+                            onSearch = {
+                                onSearchFromSuggestion(it)
+                                searchActive = false
+                            },
+                            onDismiss = { searchActive = false },
+                            pureBlack = pureBlack
+                        )
+                    }
+                }
+        },
+        containerColor = if (pureBlack) Color.Black else MaterialTheme.colorScheme.background
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .padding(top = paddingValues.calculateTopPadding())
+                .fillMaxSize()
+        ) {
+            if (!searchActive) {
+                val shapes = listOf(
+                    MaterialShapes.Cookie6Sided.toShape(),
+                    MaterialShapes.Cookie7Sided.toShape(),
+                    MaterialShapes.Cookie9Sided.toShape(),
+                    MaterialShapes.Cookie12Sided.toShape()
+                )
+
+                val bottomPadding = LocalPlayerAwareWindowInsets.current.asPaddingValues().calculateBottomPadding()
+
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottomPadding)
+                ) {
+                    moodAndGenresList?.forEachIndexed { sectionIndex, section ->
+                        item(key = "mood_section_$sectionIndex") {
+                            Text(
+                                text = section.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 16.dp, bottom = 12.dp, start = 4.dp)
+                            )
+                        }
+
+                        val rows = section.items.chunked(2)
+                        items(rows.size, key = { "mood_section_${sectionIndex}_row_$it" }) { rowIndex ->
+                            val row = rows[rowIndex]
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                row.forEachIndexed { colIndex, item ->
+                                    val itemIndex = rowIndex * 2 + colIndex
+                                    val shape = shapes[itemIndex % shapes.size]
+                                    val itemKey = if (!item.endpoint.params.isNullOrEmpty()) "${item.endpoint.browseId}_${item.endpoint.params}" else item.endpoint.browseId
+                                    val thumbnail = thumbnails[itemKey]
+
+                                    val colorScheme = MaterialTheme.colorScheme
+                                    val containerColor = when (itemIndex % 3) {
+                                        0 -> colorScheme.primaryContainer
+                                        1 -> colorScheme.secondaryContainer
+                                        else -> colorScheme.surfaceVariant
+                                    }
+                                    val contentColor = when (itemIndex % 3) {
+                                        0 -> colorScheme.onPrimaryContainer
+                                        1 -> colorScheme.onSecondaryContainer
+                                        else -> colorScheme.onSurfaceVariant
+                                    }
+                                    val cookieColor = when (itemIndex % 3) {
+                                        0 -> colorScheme.primary
+                                        1 -> colorScheme.secondary
+                                        else -> colorScheme.onSurfaceVariant
+                                    }
+
+                                    ExpressiveBox(
+                                        title = item.title,
+                                        containerColor = containerColor,
+                                        contentColor = contentColor,
+                                        accentShapeColor = cookieColor.copy(alpha = 0.35f),
+                                        shape = shape,
+                                        imageModel = thumbnail,
+                                        onClick = {
+                                            navController.navigate("youtube_browse/${item.endpoint.browseId}?params=${item.endpoint.params}")
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                if (row.size < 2) {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Handle lifecycle events to manage keyboard visibility
+    DisposableEffect(lifecycleOwner, isPlayerExpanded) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    // Always hide keyboard when resuming if player is expanded
+                    if (isPlayerExpanded) {
+                        keyboardController?.hide()
+                        focusManager.clearFocus()
+                    } else if (isFirstLaunch) {
+                        // Only request focus on first launch when player is not expanded
+                        try {
+                            focusRequester.requestFocus()
+                        } catch (e: Exception) {
+                            // Ignore focus request failures
+                        }
+                        isFirstLaunch = false
+                    }
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    // Clear focus when pausing to prevent keyboard from showing on resume
+                    focusManager.clearFocus()
+                    keyboardController?.hide()
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        
+        // Initial check - hide keyboard if player is expanded
+        if (isPlayerExpanded) {
+            keyboardController?.hide()
+            focusManager.clearFocus()
+        }
+        
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+}
